@@ -1,8 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, Colors } = require('discord.js');
-const { createClient } = require('@supabase/supabase-js');
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const db = require('./db');
 
 const client = new Client({
   intents: [
@@ -45,14 +43,11 @@ function createInfoEmbed(title, description) {
 
 async function isVerified(userId) {
   if (OWNER_ID && userId === OWNER_ID) return true;
-  
-  const { data } = await supabase
-    .from('verified_users')
-    .select('user_id')
-    .eq('user_id', userId)
-    .single();
-  
-  return !!data;
+  try {
+    return await db.isVerifiedUser(userId);
+  } catch {
+    return false;
+  }
 }
 
 async function requireVerification(message) {
@@ -144,21 +139,13 @@ async function handleAddOrder(message, args) {
   const profit = price - rate;
 
   try {
-    const { data, error } = await supabase
-      .from('orders')
-      .insert([
-        {
-          product,
-          player_id: playerId,
-          price,
-          rate,
-          created_at: createdAt.toISOString(),
-        },
-      ])
-      .select()
-      .single();
-
-    if (error) throw error;
+    const data = await db.addOrder({
+      product,
+      player_id: playerId,
+      price,
+      rate,
+      created_at: createdAt.toISOString(),
+    });
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Green)
@@ -187,13 +174,7 @@ async function handleSales(message) {
   if (!(await requireVerification(message))) return;
   
   try {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(5);
-
-    if (error) throw error;
+    const data = await db.getRecentOrders(5);
 
     if (!data || data.length === 0) {
       return message.reply({
@@ -228,9 +209,7 @@ async function handleProfit(message) {
   if (!(await requireVerification(message))) return;
   
   try {
-    const { data, error } = await supabase.from('orders').select('price, rate');
-
-    if (error) throw error;
+    const data = await db.getAllOrderPrices();
 
     if (!data || data.length === 0) {
       return message.reply({
@@ -275,11 +254,7 @@ async function handleVerify(message, args) {
   const target = message.mentions.users.first();
   
   try {
-    const { error } = await supabase
-      .from('verified_users')
-      .upsert({ user_id: target.id, verified_by: message.author.id }, { onConflict: 'user_id' });
-
-    if (error) throw error;
+    await db.verifyUser(target.id, message.author.id);
 
     await message.reply({
       embeds: [createSuccessEmbed('User Verified', `<@${target.id}> has been verified and can now use the bot.`)],
@@ -310,12 +285,7 @@ async function handleUnverify(message, args) {
   }
   
   try {
-    const { error } = await supabase
-      .from('verified_users')
-      .delete()
-      .eq('user_id', target.id);
-
-    if (error) throw error;
+    await db.unverifyUser(target.id);
 
     await message.reply({
       embeds: [createSuccessEmbed('User Unverified', `<@${target.id}> has been unverified and can no longer use the bot.`)],
@@ -332,12 +302,7 @@ async function handleVerifiedList(message) {
   if (!(await requireVerification(message))) return;
   
   try {
-    const { data, error } = await supabase
-      .from('verified_users')
-      .select('user_id, verified_by, created_at')
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
+    const data = await db.listVerifiedUsers();
 
     if (!data || data.length === 0) {
       return message.reply({

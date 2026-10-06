@@ -1,14 +1,12 @@
 require('dotenv').config();
-const { createClient } = require('@supabase/supabase-js');
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const db = require('./db');
 
 function formatLKR(amount) {
   return `LKR ${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function printHelp() {
-  console.log(`Free Fire Top-Up Database - CLI
+  console.log(`Free Fire Top-Up Database - CLI (provider: ${db.getProviderName()})
 Usage:
   node cli.js add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]
   node cli.js sales
@@ -75,55 +73,55 @@ async function cmdAdd(args) {
     process.exitCode = 1;
     return;
   }
-  const { data, error } = await supabase.from('orders').insert([{ product, player_id: playerId, price, rate, created_at: createdAt.toISOString() }]).select().single();
-  if (error) {
-    console.error('Database Error:', error.message);
+  try {
+    const data = await db.addOrder({ product, player_id: playerId, price, rate, created_at: createdAt.toISOString() });
+    console.log(`Order added | ID: ${data.id} | ${product} | Player: ${playerId} | Price: ${formatLKR(price)} | Rate: ${formatLKR(rate)} | Profit: ${formatLKR(price - rate)} | Date: ${createdAt.toLocaleString()}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
     process.exitCode = 1;
-    return;
   }
-  console.log(`Order added | ID: ${data.id} | ${product} | Player: ${playerId} | Price: ${formatLKR(price)} | Rate: ${formatLKR(rate)} | Profit: ${formatLKR(price - rate)} | Date: ${createdAt.toLocaleString()}`);
 }
 
 async function cmdSales() {
-  const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(5);
-  if (error) {
-    console.error('Database Error:', error.message);
+  try {
+    const data = await db.getRecentOrders(5);
+    if (!data || data.length === 0) {
+      console.log('No orders found.');
+      return;
+    }
+    console.table(data.map((o, i) => ({
+      '#': i + 1,
+      ID: o.id,
+      Product: o.product,
+      Player: o.player_id,
+      Price: Number(o.price),
+      Rate: Number(o.rate),
+      Profit: Number(o.price) - Number(o.rate),
+      Date: new Date(o.created_at).toLocaleString()
+    })));
+  } catch (e) {
+    console.error('Database Error:', e.message);
     process.exitCode = 1;
-    return;
   }
-  if (!data || data.length === 0) {
-    console.log('No orders found.');
-    return;
-  }
-  console.table(data.map((o, i) => ({
-    '#': i + 1,
-    ID: o.id,
-    Product: o.product,
-    Player: o.player_id,
-    Price: Number(o.price),
-    Rate: Number(o.rate),
-    Profit: Number(o.price) - Number(o.rate),
-    Date: new Date(o.created_at).toLocaleString()
-  })));
 }
 
 async function cmdProfit() {
-  const { data, error } = await supabase.from('orders').select('price, rate');
-  if (error) {
-    console.error('Database Error:', error.message);
+  try {
+    const data = await db.getAllOrderPrices();
+    if (!data || data.length === 0) {
+      console.log('No orders found.');
+      return;
+    }
+    const revenue = data.reduce((s, o) => s + Number(o.price), 0);
+    const cost = data.reduce((s, o) => s + Number(o.rate), 0);
+    console.log(`Total Orders: ${data.length}`);
+    console.log(`Total Revenue: ${formatLKR(revenue)}`);
+    console.log(`Total Cost: ${formatLKR(cost)}`);
+    console.log(`Net Profit: ${formatLKR(revenue - cost)}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
     process.exitCode = 1;
-    return;
   }
-  if (!data || data.length === 0) {
-    console.log('No orders found.');
-    return;
-  }
-  const revenue = data.reduce((s, o) => s + Number(o.price), 0);
-  const cost = data.reduce((s, o) => s + Number(o.rate), 0);
-  console.log(`Total Orders: ${data.length}`);
-  console.log(`Total Revenue: ${formatLKR(revenue)}`);
-  console.log(`Total Cost: ${formatLKR(cost)}`);
-  console.log(`Net Profit: ${formatLKR(revenue - cost)}`);
 }
 
 async function cmdVerify(args) {
@@ -133,13 +131,13 @@ async function cmdVerify(args) {
     process.exitCode = 1;
     return;
   }
-  const { error } = await supabase.from('verified_users').upsert({ user_id: userId, verified_by: 'cli' }, { onConflict: 'user_id' });
-  if (error) {
-    console.error('Database Error:', error.message);
+  try {
+    await db.verifyUser(userId, 'cli');
+    console.log(`Verified: ${userId}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
     process.exitCode = 1;
-    return;
   }
-  console.log(`Verified: ${userId}`);
 }
 
 async function cmdUnverify(args) {
@@ -149,37 +147,32 @@ async function cmdUnverify(args) {
     process.exitCode = 1;
     return;
   }
-  const { error } = await supabase.from('verified_users').delete().eq('user_id', userId);
-  if (error) {
-    console.error('Database Error:', error.message);
+  try {
+    await db.unverifyUser(userId);
+    console.log(`Unverified: ${userId}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
     process.exitCode = 1;
-    return;
   }
-  console.log(`Unverified: ${userId}`);
 }
 
 async function cmdVerified() {
-  const { data, error } = await supabase.from('verified_users').select('user_id, verified_by, created_at').order('created_at', { ascending: false });
-  if (error) {
-    console.error('Database Error:', error.message);
+  try {
+    const data = await db.listVerifiedUsers();
+    if (!data || data.length === 0) {
+      console.log('No verified users.');
+      return;
+    }
+    console.table(data.map(u => ({ UserID: u.user_id, VerifiedBy: u.verified_by, Date: new Date(u.created_at).toLocaleString() })));
+  } catch (e) {
+    console.error('Database Error:', e.message);
     process.exitCode = 1;
-    return;
   }
-  if (!data || data.length === 0) {
-    console.log('No verified users.');
-    return;
-  }
-  console.table(data.map(u => ({ UserID: u.user_id, VerifiedBy: u.verified_by, Date: new Date(u.created_at).toLocaleString() })));
 }
 
 async function main() {
   const args = process.argv.slice(2);
   const command = (args.shift() || 'help').toLowerCase();
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-    console.error('Missing SUPABASE_URL or SUPABASE_KEY in .env');
-    process.exitCode = 1;
-    return;
-  }
   switch (command) {
     case 'add':
       await cmdAdd(args);

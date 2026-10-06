@@ -58,8 +58,28 @@ SUPABASE_KEY=your_supabase_anon_key
 OWNER_ID=your_discord_user_id
 ```
 
+### Database Providers
+Set `DB_PROVIDER` in `.env` to switch storage. Default is `supabase`.
+
+| Provider | Value | Needs |
+|----------|-------|-------|
+| Supabase | `supabase` | SUPABASE_URL, SUPABASE_KEY |
+| JSON file | `json` | JSON_DATA_DIR (default ./data) |
+| SQLite | `sqlite` | SQLITE_PATH + `npm i better-sqlite3` |
+| MySQL | `mysql` | DATABASE_URL/MYSQL_URL + `npm i mysql2` |
+| Postgres | `postgres` | DATABASE_URL/POSTGRES_URL + `npm i pg` |
+| MongoDB | `mongo` | MONGO_URI (+MONGO_DB) + `npm i mongodb` |
+| Firebase | `firebase` | FIREBASE_SERVICE_ACCOUNT_JSON/PATH + `npm i firebase-admin` |
+| Google Sheets | `sheets` | GOOGLE_SHEETS_ID + service account + `npm i googleapis` |
+
+Multi-write mirror (primary + extra copies):
+```env
+DB_PROVIDER=supabase
+DB_MIRROR=json,sheets
+```
+
 ### Database Setup
-Run these SQL commands in Supabase SQL Editor:
+Supabase selected nam me SQL run karanna:
 ```sql
 -- Orders table
 CREATE TABLE orders (

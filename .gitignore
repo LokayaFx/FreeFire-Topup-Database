@@ -27,3 +27,8 @@ Thumbs.db
 dist/
 build/
 *.tsbuildinfo
+
+# Local data (JSON/SQLite storage)
+data/
+*.db
+*.sqlite
