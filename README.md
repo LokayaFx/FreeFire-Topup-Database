@@ -91,8 +91,19 @@ CREATE TABLE verified_users (
 
 ### Run
 ```bash
-npm start        # Production
+npm start        # Production (Discord bot)
 npm run dev      # Development with auto-reload
+npm run cli -- help   # CLI mode (no Discord needed)
+```
+
+### CLI Mode (Terminal)
+```bash
+node cli.js add 100DB 123456789 350 290
+node cli.js add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30
+node cli.js sales
+node cli.js profit
+node cli.js verify <UserID>
+node cli.js verified
 ```
 
 ## Tech Stack
