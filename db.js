@@ -13,6 +13,28 @@ function notConfigured(name, hint) {
   throw new Error(`${name} not configured. ${hint || ''}`.trim());
 }
 
+function parseRateList(text) {
+  const items = [];
+  let category = null;
+  for (const raw of String(text || '').split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(/^[-•*]\s*(.+?)\s*(?:⇒|→|=>|>|=|:)\s*([\d,]+(?:\.\d+)?)\s*LKR/i);
+    if (m) {
+      const rate = Number(m[2].replace(/,/g, ''));
+      if (m[1].trim() && !isNaN(rate) && rate > 0) {
+        items.push({ product: m[1].trim().toUpperCase(), rate, category });
+      }
+      continue;
+    }
+    if (!/LKR/i.test(line)) {
+      const c = line.replace(/[^A-Za-z0-9 ]/g, '').trim();
+      if (c) category = c;
+    }
+  }
+  return items;
+}
+
 function supabaseClient() {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) notConfigured('Supabase', 'Set SUPABASE_URL and SUPABASE_KEY.');
   const { createClient } = require('@supabase/supabase-js');
@@ -81,6 +103,34 @@ const supabaseProvider = {
     const { data, error } = await sb.from('verified_users').select('user_id, verified_by, created_at').order('created_at', { ascending: false });
     if (error) throw error;
     return data || [];
+  },
+  async setRate(product, rate, category) {
+    const sb = supabaseClient();
+    const { error } = await sb.from('rates').upsert({ product, rate, category: category || null, updated_at: new Date().toISOString() }, { onConflict: 'product' });
+    if (error) throw error;
+  },
+  async getRate(product) {
+    const sb = supabaseClient();
+    const { data, error } = await sb.from('rates').select('*').eq('product', product).single();
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || null;
+  },
+  async getAllRates() {
+    const sb = supabaseClient();
+    const { data, error } = await sb.from('rates').select('*').order('product');
+    if (error) throw error;
+    return data || [];
+  },
+  async getSetting(key) {
+    const sb = supabaseClient();
+    const { data, error } = await sb.from('settings').select('*').eq('key', key).single();
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || null;
+  },
+  async setSetting(key, value) {
+    const sb = supabaseClient();
+    const { error } = await sb.from('settings').upsert({ key, value: String(value), updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    if (error) throw error;
   }
 };
 
@@ -164,6 +214,31 @@ const jsonProvider = {
   async listVerifiedUsers() {
     const rows = readJson(this.verifiedFile(), []);
     return rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  },
+  ratesFile() { return path.join(jsonDir(), 'rates.json'); },
+  async setRate(product, rate, category) {
+    const file = this.ratesFile();
+    const rows = readJson(file, []);
+    const ex = rows.find((r) => r.product === product);
+    if (ex) { ex.rate = rate; ex.category = category || ex.category || null; ex.updated_at = new Date().toISOString(); }
+    else rows.push({ product, rate, category: category || null, updated_at: new Date().toISOString() });
+    writeJson(file, rows);
+  },
+  async getRate(product) {
+    return readJson(this.ratesFile(), []).find((r) => r.product === product) || null;
+  },
+  async getAllRates() {
+    return readJson(this.ratesFile(), []).sort((a, b) => String(a.product).localeCompare(String(b.product)));
+  },
+  settingsFile() { return path.join(jsonDir(), 'settings.json'); },
+  async getSetting(key) {
+    return readJson(this.settingsFile(), {})[key] ?? null;
+  },
+  async setSetting(key, value) {
+    const file = this.settingsFile();
+    const obj = readJson(file, {});
+    obj[key] = { key, value: String(value), updated_at: new Date().toISOString() };
+    writeJson(file, obj);
   }
 };
 
@@ -178,7 +253,9 @@ function sqliteDb() {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   db.exec(`CREATE TABLE IF NOT EXISTS orders (id INTEGER PRIMARY KEY AUTOINCREMENT, product TEXT NOT NULL, player_id TEXT NOT NULL, price REAL NOT NULL, rate REAL NOT NULL, created_at TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS verified_users (user_id TEXT PRIMARY KEY, verified_by TEXT NOT NULL, created_at TEXT NOT NULL);`);
+  CREATE TABLE IF NOT EXISTS verified_users (user_id TEXT PRIMARY KEY, verified_by TEXT NOT NULL, created_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS rates (product TEXT PRIMARY KEY, rate REAL NOT NULL, category TEXT, updated_at TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);`);
   return db;
 }
 
@@ -252,6 +329,34 @@ const sqliteProvider = {
     const rows = db.prepare('SELECT * FROM verified_users ORDER BY datetime(created_at) DESC').all();
     db.close();
     return rows;
+  },
+  async setRate(product, rate, category) {
+    const db = sqliteDb();
+    db.prepare('INSERT INTO rates (product, rate, category, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(product) DO UPDATE SET rate = excluded.rate, category = excluded.category, updated_at = excluded.updated_at').run(product, rate, category || null, new Date().toISOString());
+    db.close();
+  },
+  async getRate(product) {
+    const db = sqliteDb();
+    const row = db.prepare('SELECT * FROM rates WHERE product = ?').get(product);
+    db.close();
+    return row || null;
+  },
+  async getAllRates() {
+    const db = sqliteDb();
+    const rows = db.prepare('SELECT * FROM rates ORDER BY product').all();
+    db.close();
+    return rows;
+  },
+  async getSetting(key) {
+    const db = sqliteDb();
+    const row = db.prepare('SELECT * FROM settings WHERE key = ?').get(key);
+    db.close();
+    return row || null;
+  },
+  async setSetting(key, value) {
+    const db = sqliteDb();
+    db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at').run(key, String(value), new Date().toISOString());
+    db.close();
   }
 };
 
@@ -267,6 +372,8 @@ async function mysqlPool() {
   const pool = mysql.createPool(uri);
   await pool.execute(`CREATE TABLE IF NOT EXISTS orders (id BIGINT AUTO_INCREMENT PRIMARY KEY, product TEXT NOT NULL, player_id TEXT NOT NULL, price DECIMAL(12,2) NOT NULL, rate DECIMAL(12,2) NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
   await pool.execute(`CREATE TABLE IF NOT EXISTS verified_users (user_id VARCHAR(64) PRIMARY KEY, verified_by VARCHAR(64) NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+  await pool.execute(`CREATE TABLE IF NOT EXISTS rates (product VARCHAR(64) PRIMARY KEY, rate DECIMAL(12,2) NOT NULL, category VARCHAR(64), updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)`);
+  await pool.execute(`CREATE TABLE IF NOT EXISTS settings (\`key\` VARCHAR(64) PRIMARY KEY, value VARCHAR(255) NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)`);
   return pool;
 }
 
@@ -339,6 +446,34 @@ const mysqlProvider = {
     const [rows] = await pool.execute('SELECT * FROM verified_users ORDER BY created_at DESC');
     await pool.end();
     return rows;
+  },
+  async setRate(product, rate, category) {
+    const pool = await mysqlPool();
+    await pool.execute('INSERT INTO rates (product, rate, category) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE rate = VALUES(rate), category = VALUES(category)', [product, rate, category || null]);
+    await pool.end();
+  },
+  async getRate(product) {
+    const pool = await mysqlPool();
+    const [rows] = await pool.execute('SELECT * FROM rates WHERE product = ?', [product]);
+    await pool.end();
+    return rows[0] || null;
+  },
+  async getAllRates() {
+    const pool = await mysqlPool();
+    const [rows] = await pool.execute('SELECT * FROM rates ORDER BY product');
+    await pool.end();
+    return rows;
+  },
+  async getSetting(key) {
+    const pool = await mysqlPool();
+    const [rows] = await pool.execute('SELECT * FROM settings WHERE `key` = ?', [key]);
+    await pool.end();
+    return rows[0] || null;
+  },
+  async setSetting(key, value) {
+    const pool = await mysqlPool();
+    await pool.execute('INSERT INTO settings (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)', [key, String(value)]);
+    await pool.end();
   }
 };
 
@@ -353,6 +488,8 @@ async function pgPool() {
   const pool = new Pg({ connectionString: process.env.DATABASE_URL || process.env.POSTGRES_URL });
   await pool.query(`CREATE TABLE IF NOT EXISTS orders (id BIGSERIAL PRIMARY KEY, product TEXT NOT NULL, player_id TEXT NOT NULL, price NUMERIC NOT NULL, rate NUMERIC NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
   await pool.query(`CREATE TABLE IF NOT EXISTS verified_users (user_id TEXT PRIMARY KEY, verified_by TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW())`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS rates (product TEXT PRIMARY KEY, rate NUMERIC NOT NULL, category TEXT, updated_at TIMESTAMPTZ DEFAULT NOW())`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())`);
   return pool;
 }
 
@@ -424,6 +561,34 @@ const postgresProvider = {
     const { rows } = await pool.query('SELECT * FROM verified_users ORDER BY created_at DESC');
     await pool.end();
     return rows;
+  },
+  async setRate(product, rate, category) {
+    const pool = await pgPool();
+    await pool.query('INSERT INTO rates (product, rate, category, updated_at) VALUES ($1,$2,$3,NOW()) ON CONFLICT (product) DO UPDATE SET rate = EXCLUDED.rate, category = EXCLUDED.category, updated_at = NOW()', [product, rate, category || null]);
+    await pool.end();
+  },
+  async getRate(product) {
+    const pool = await pgPool();
+    const { rows } = await pool.query('SELECT * FROM rates WHERE product = $1', [product]);
+    await pool.end();
+    return rows[0] || null;
+  },
+  async getAllRates() {
+    const pool = await pgPool();
+    const { rows } = await pool.query('SELECT * FROM rates ORDER BY product');
+    await pool.end();
+    return rows;
+  },
+  async getSetting(key) {
+    const pool = await pgPool();
+    const { rows } = await pool.query('SELECT * FROM settings WHERE key = $1', [key]);
+    await pool.end();
+    return rows[0] || null;
+  },
+  async setSetting(key, value) {
+    const pool = await pgPool();
+    await pool.query('INSERT INTO settings (key, value, updated_at) VALUES ($1,$2,NOW()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()', [key, String(value)]);
+    await pool.end();
   }
 };
 
@@ -516,6 +681,34 @@ const mongoProvider = {
     const rows = await db.collection('verified_users').find({}).sort({ created_at: -1 }).toArray();
     await client.close();
     return rows;
+  },
+  async setRate(product, rate, category) {
+    const { client, db } = await mongoDb();
+    await db.collection('rates').updateOne({ product }, { $set: { product, rate: Number(rate), category: category || null, updated_at: new Date() } }, { upsert: true });
+    await client.close();
+  },
+  async getRate(product) {
+    const { client, db } = await mongoDb();
+    const row = await db.collection('rates').findOne({ product });
+    await client.close();
+    return row || null;
+  },
+  async getAllRates() {
+    const { client, db } = await mongoDb();
+    const rows = await db.collection('rates').find({}).sort({ product: 1 }).toArray();
+    await client.close();
+    return rows;
+  },
+  async getSetting(key) {
+    const { client, db } = await mongoDb();
+    const row = await db.collection('settings').findOne({ key });
+    await client.close();
+    return row || null;
+  },
+  async setSetting(key, value) {
+    const { client, db } = await mongoDb();
+    await db.collection('settings').updateOne({ key }, { $set: { key, value: String(value), updated_at: new Date() } }, { upsert: true });
+    await client.close();
   }
 };
 
@@ -592,6 +785,29 @@ const firebaseProvider = {
     const db = firebaseDb();
     const snap = await db.collection('verified_users').orderBy('created_at', 'desc').get();
     return snap.docs.map((d) => d.data());
+  },
+  async setRate(product, rate, category) {
+    const db = firebaseDb();
+    await db.collection('rates').doc(product).set({ product, rate: Number(rate), category: category || null, updated_at: new Date().toISOString() }, { merge: true });
+  },
+  async getRate(product) {
+    const db = firebaseDb();
+    const snap = await db.collection('rates').doc(product).get();
+    return snap.exists ? snap.data() : null;
+  },
+  async getAllRates() {
+    const db = firebaseDb();
+    const snap = await db.collection('rates').orderBy('product').get();
+    return snap.docs.map((d) => d.data());
+  },
+  async getSetting(key) {
+    const db = firebaseDb();
+    const snap = await db.collection('settings').doc(key).get();
+    return snap.exists ? snap.data() : null;
+  },
+  async setSetting(key, value) {
+    const db = firebaseDb();
+    await db.collection('settings').doc(key).set({ key, value: String(value), updated_at: new Date().toISOString() }, { merge: true });
   }
 };
 
@@ -658,6 +874,29 @@ const sheetsProvider = {
     const { sheets, id } = await sheetsClient();
     const res = await sheets.spreadsheets.values.get({ spreadsheetId: id, range: 'verified!A:C' });
     return (res.data.values || []).slice(1).map((r) => ({ user_id: r[0], verified_by: r[1], created_at: r[2] }));
+  },
+  async setRate(product, rate, category) {
+    const { sheets, id } = await sheetsClient();
+    await sheets.spreadsheets.values.append({ spreadsheetId: id, range: 'rates!A:D', valueInputOption: 'RAW', requestBody: { values: [[product, rate, category || '', new Date().toISOString()]] } });
+  },
+  async getRate(product) {
+    const rows = await this.getAllRates();
+    return rows.find((r) => String(r.product).toUpperCase() === String(product).toUpperCase()) || null;
+  },
+  async getAllRates() {
+    const { sheets, id } = await sheetsClient();
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: id, range: 'rates!A:D' });
+    return (res.data.values || []).slice(1).map((r) => ({ product: r[0], rate: r[1], category: r[2], updated_at: r[3] }));
+  },
+  async getSetting(key) {
+    const { sheets, id } = await sheetsClient();
+    const res = await sheets.spreadsheets.values.get({ spreadsheetId: id, range: 'settings!A:B' });
+    const row = (res.data.values || []).slice(1).find((r) => r[0] === key);
+    return row ? { key: row[0], value: row[1] } : null;
+  },
+  async setSetting(key, value) {
+    const { sheets, id } = await sheetsClient();
+    await sheets.spreadsheets.values.append({ spreadsheetId: id, range: 'settings!A:B', valueInputOption: 'RAW', requestBody: { values: [[key, String(value)]] } });
   }
 };
 
@@ -698,6 +937,19 @@ async function mirrorWrite(fn, ...args) {
 
 module.exports = {
   getProviderName,
+  parseRateList,
+  async setRate(product, rate, category) {
+    const p = String(product).trim().toUpperCase();
+    await primary().setRate(p, rate, category);
+    mirrorWrite('setRate', p, rate, category);
+  },
+  getRate(product) { return primary().getRate(String(product).trim().toUpperCase()); },
+  getAllRates() { return primary().getAllRates(); },
+  getSetting(key) { return primary().getSetting(key); },
+  async setSetting(key, value) {
+    await primary().setSetting(key, value);
+    mirrorWrite('setSetting', key, value);
+  },
   async addOrder(payload) {
     const row = await primary().addOrder(payload);
     mirrorWrite('addOrder', payload);

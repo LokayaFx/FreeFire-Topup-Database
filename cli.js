@@ -20,16 +20,19 @@ Usage:
   node cli.js monthly [YYYY-MM]
   node cli.js search <PlayerID>
   node cli.js export [filepath]
+  node cli.js updaterates <file>
+  node cli.js rates
+  node cli.js verifytoggle [on|off]
   node cli.js help
 Examples:
   node cli.js add 100DB 123456789 350 290
   node cli.js add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30`);
 }
 
-function parseDateTime(args) {
+function parseDateTime(args, start = 4) {
   let customDate = null;
   let customTime = null;
-  for (let i = 4; i < args.length; i++) {
+  for (let i = start; i < args.length; i++) {
     if (args[i] === '-d' || args[i] === '--date') {
       customDate = args[i + 1];
       i++;
@@ -57,23 +60,46 @@ function parseDateTime(args) {
 }
 
 async function cmdAdd(args) {
-  if (args.length < 4) {
-    console.error('Usage: node cli.js add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]');
+  if (args.length < 3) {
+    console.error('Usage: node cli.js add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]');
     process.exitCode = 1;
     return;
   }
   const product = args[0];
   const playerId = args[1];
   const price = Number(args[2]);
-  const rate = Number(args[3]);
-  if (isNaN(price) || isNaN(rate) || price <= 0 || rate <= 0) {
-    console.error('Price and Rate must be valid numbers greater than 0.');
+  const rateArg = args[3] && !args[3].startsWith('-') ? args[3] : null;
+  if (isNaN(price) || price <= 0) {
+    console.error('Price must be a valid number greater than 0.');
     process.exitCode = 1;
     return;
   }
+  let rate;
+  if (rateArg !== null) {
+    rate = Number(rateArg);
+    if (isNaN(rate) || rate <= 0) {
+      console.error('Rate must be a valid number greater than 0.');
+      process.exitCode = 1;
+      return;
+    }
+  } else {
+    try {
+      const saved = await db.getRate(product);
+      if (!saved) {
+        console.error(`No saved rate for "${product}". Give rate manually or run: node cli.js updaterates <file>`);
+        process.exitCode = 1;
+        return;
+      }
+      rate = Number(saved.rate);
+    } catch (e) {
+      console.error('Database Error:', e.message);
+      process.exitCode = 1;
+      return;
+    }
+  }
   let createdAt;
   try {
-    createdAt = parseDateTime(args);
+    createdAt = parseDateTime(args, rateArg === null ? 3 : 4);
   } catch (e) {
     console.error(e.message);
     process.exitCode = 1;
@@ -316,6 +342,62 @@ async function cmdExport(args) {
   }
 }
 
+async function cmdUpdateRates(args) {
+  const fs = require('fs');
+  if (!args[0]) {
+    console.error('Usage: node cli.js updaterates <file>  (file with supplier rate list text)');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const text = fs.readFileSync(args[0], 'utf8');
+    const items = db.parseRateList(text);
+    if (!items.length) {
+      console.error('No rates found in file.');
+      process.exitCode = 1;
+      return;
+    }
+    for (const it of items) await db.setRate(it.product, it.rate, it.category);
+    console.log(`Updated ${items.length} rates.`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdRates() {
+  try {
+    const rows = await db.getAllRates();
+    if (!rows.length) { console.log('No saved rates.'); return; }
+    console.table(rows.map((r) => ({ Product: r.product, Rate: Number(r.rate), Category: r.category || '', Updated: r.updated_at ? new Date(r.updated_at).toLocaleString() : '' })));
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdVerifyToggle(args) {
+  const mode = (args[0] || '').toLowerCase();
+  try {
+    if (!mode) {
+      const s = await db.getSetting('verification');
+      const on = !s || String(s.value).toLowerCase() !== 'off';
+      console.log(`Verification is ${on ? 'ON (verified-only)' : 'OFF (public)'}.`);
+      return;
+    }
+    if (mode !== 'on' && mode !== 'off') {
+      console.error('Usage: node cli.js verifytoggle [on|off]');
+      process.exitCode = 1;
+      return;
+    }
+    await db.setSetting('verification', mode);
+    console.log(`Verification ${mode.toUpperCase()}.`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = (args.shift() || 'help').toLowerCase();
@@ -355,6 +437,15 @@ async function main() {
       break;
     case 'export':
       await cmdExport(args);
+      break;
+    case 'updaterates':
+      await cmdUpdateRates(args);
+      break;
+    case 'rates':
+      await cmdRates();
+      break;
+    case 'verifytoggle':
+      await cmdVerifyToggle(args);
       break;
     case 'help':
     default:

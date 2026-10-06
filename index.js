@@ -1,4 +1,5 @@
 require('dotenv').config();
+const http = require('http');
 const { Client, GatewayIntentBits, EmbedBuilder, Colors, AttachmentBuilder } = require('discord.js');
 const db = require('./db');
 
@@ -72,30 +73,49 @@ async function isVerified(userId) {
   }
 }
 
+async function verificationEnabled() {
+  try {
+    const s = await db.getSetting('verification');
+    if (!s) return true;
+    return String(s.value).toLowerCase() !== 'off';
+  } catch {
+    return true;
+  }
+}
+
 async function requireVerification(message) {
-  const verified = await isVerified(message.author.id);
-  if (!verified) {
+  if (OWNER_ID && message.author.id === OWNER_ID) return true;
+  if (await verificationEnabled()) {
+    if (await isVerified(message.author.id)) return true;
     return reject(message, 'Not Verified', 'You are not verified to use this bot. Contact an admin to get verified.');
   }
   return true;
 }
 
+async function requireAdmin(message) {
+  if (OWNER_ID && message.author.id === OWNER_ID) return true;
+  if (message.member && message.member.permissions && message.member.permissions.has('ManageGuild')) return true;
+  if (await isVerified(message.author.id)) return true;
+  return reject(message, 'Not Allowed', 'Only the owner, server managers, or verified users can use this command.');
+}
+
 async function handleAddOrder(message, args) {
   if (!(await requireVerification(message))) return;
   
-  if (args.length < 4) {
-    return reject(message, 'Invalid Usage', 'Usage: `!add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]`\nExample: `!add 100DB 123456789 350 290`\nWith date: `!add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30`');
+  if (args.length < 3) {
+    return reject(message, 'Invalid Usage', 'Usage: `!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]`\nExample: `!add 100DB 123456789 350 290`\nAuto-rate: `!add WEEKLY 123456789 600` (rate from saved rates)');
   }
 
   let product = args[0];
   let playerId = args[1];
   let priceStr = args[2];
-  let rateStr = args[3];
+  let rateStr = args[3] && !args[3].startsWith('-') ? args[3] : null;
+  const flagStart = rateStr === null ? 3 : 4;
   
   let customDate = null;
   let customTime = null;
   
-  for (let i = 4; i < args.length; i++) {
+  for (let i = flagStart; i < args.length; i++) {
     if (args[i] === '-d' || args[i] === '--date') {
       customDate = args[i + 1];
       i++;
@@ -106,14 +126,30 @@ async function handleAddOrder(message, args) {
   }
 
   const price = Number(priceStr);
-  const rate = Number(rateStr);
-
-  if (isNaN(price) || isNaN(rate)) {
-    return reject(message, 'Invalid Input', 'Price and Rate must be valid numbers.');
+  if (isNaN(price) || price <= 0) {
+    return reject(message, 'Invalid Input', 'Price must be a valid number greater than 0.');
   }
 
-  if (price <= 0 || rate <= 0) {
-    return reject(message, 'Invalid Input', 'Price and Rate must be greater than 0.');
+  let rate;
+  if (rateStr !== null) {
+    rate = Number(rateStr);
+    if (isNaN(rate) || rate <= 0) {
+      return reject(message, 'Invalid Input', 'Rate must be a valid number greater than 0.');
+    }
+  } else {
+    try {
+      const saved = await db.getRate(product);
+      if (!saved) {
+        return reject(message, 'Rate Not Found', `No saved rate for "${product}".\nGive rate manually: \`!add ${product} ${playerId} ${priceStr} <Rate>\` or run \`!updaterates\` first.`);
+      }
+      rate = Number(saved.rate);
+    } catch (err) {
+      if (err && err.rejected) throw err;
+      console.error('Rate lookup error:', err);
+      return message.reply({
+        embeds: [createErrorEmbed('Database Error', 'Failed to look up rate. Please try again later.')],
+      });
+    }
   }
 
   let createdAt = new Date();
@@ -569,13 +605,125 @@ async function handleExport(message) {
   }
 }
 
+async function handleUpdateRates(message) {
+  if (!(await requireVerification(message))) return;
+
+  let sourceText = null;
+  try {
+    if (message.reference && message.reference.messageId) {
+      const ref = await message.channel.messages.fetch(message.reference.messageId);
+      sourceText = ref.content;
+    } else {
+      const idx = message.content.indexOf('\n');
+      sourceText = idx === -1 ? '' : message.content.slice(idx + 1);
+    }
+  } catch (err) {
+    return reject(message, 'Fetch Failed', 'Could not read the replied message. Reply to the supplier rate message with `!updaterates`.');
+  }
+
+  const items = db.parseRateList(sourceText);
+  if (!items.length) {
+    return reject(message, 'No Rates Found', 'No rates found. Reply to the supplier rate message with `!updaterates`, or paste the list after the command:\n`!updaterates`\n`- WEEKLY ⇒ 540.0 LKR`\n`- 100 ⇒ 315.0 LKR`');
+  }
+
+  try {
+    for (const it of items) {
+      await db.setRate(it.product, it.rate, it.category);
+    }
+    const byCat = {};
+    for (const it of items) {
+      const c = it.category || 'Rates';
+      if (!byCat[c]) byCat[c] = [];
+      byCat[c].push(`${it.product}: ${formatLKR(it.rate)}`);
+    }
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Green)
+      .setTitle(`✅ Rates Updated (${items.length})`)
+      .setTimestamp();
+    for (const [cat, lines] of Object.entries(byCat).slice(0, 20)) {
+      embed.addFields({ name: cat, value: lines.join('\n').slice(0, 1000), inline: false });
+    }
+    await message.reply({ embeds: [embed] });
+  } catch (err) {
+    if (err && err.rejected) throw err;
+    console.error('UpdateRates error:', err);
+    await message.reply({
+      embeds: [createErrorEmbed('Database Error', err.message || 'Failed to save rates.')],
+    });
+  }
+}
+
+async function handleRates(message) {
+  if (!(await requireVerification(message))) return;
+
+  try {
+    const rows = await db.getAllRates();
+    if (!rows.length) {
+      return message.reply({
+        embeds: [createInfoEmbed('No Rates', 'No saved rates. Run `!updaterates` first.')],
+      });
+    }
+    const byCat = {};
+    for (const r of rows) {
+      const c = r.category || 'Rates';
+      if (!byCat[c]) byCat[c] = [];
+      byCat[c].push(`${r.product}: ${formatLKR(r.rate)}`);
+    }
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blue)
+      .setTitle(`💲 Saved Rates (${rows.length})`)
+      .setTimestamp();
+    for (const [cat, lines] of Object.entries(byCat).slice(0, 20)) {
+      embed.addFields({ name: cat, value: lines.join('\n').slice(0, 1000), inline: false });
+    }
+    await message.reply({ embeds: [embed] });
+  } catch (err) {
+    console.error('Rates error:', err);
+    await message.reply({
+      embeds: [createErrorEmbed('Database Error', 'Failed to fetch rates.')],
+    });
+  }
+}
+
+async function handleVerifyToggle(message, args) {
+  if (!(await requireAdmin(message))) return;
+
+  const mode = (args[0] || '').toLowerCase();
+  if (!mode) {
+    const on = await verificationEnabled();
+    return message.reply({
+      embeds: [createInfoEmbed('Verification Mode', on ? 'ON — only verified users can use commands.\nUse `!verifytoggle off` for public mode.' : 'OFF — everyone can use commands.\nUse `!verifytoggle on` for verified-only mode.')],
+    });
+  }
+  if (mode !== 'on' && mode !== 'off') {
+    return reject(message, 'Invalid Usage', 'Usage: `!verifytoggle [on|off]`');
+  }
+
+  try {
+    await db.setSetting('verification', mode);
+    await message.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(mode === 'on' ? Colors.Green : Colors.Blue)
+        .setTitle(mode === 'on' ? '🔒 Verification ON' : '🔓 Verification OFF')
+        .setDescription(mode === 'on' ? 'Only verified users can use commands.' : 'Everyone can use commands.')
+        .setTimestamp()],
+    });
+  } catch (err) {
+    if (err && err.rejected) throw err;
+    console.error('VerifyToggle error:', err);
+    await message.reply({
+      embeds: [createErrorEmbed('Database Error', 'Failed to update setting.')],
+    });
+  }
+}
+
 function handleHelp(message) {
   const embed = new EmbedBuilder()
     .setColor(Colors.Gold)
     .setTitle('🤖 Free Fire Top-Up Database - Commands')
     .setDescription('Here are all available commands:')
     .addFields(
-      { name: '`!add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]`', value: 'Add a new order\nExample: `!add 100DB 123456789 350 290`\nWith custom date/time: `!add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30`', inline: false },
+      { name: '`!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]`', value: 'Add a new order (rate auto-fills from saved rates)\nExample: `!add 100DB 123456789 350 290` or `!add WEEKLY 123456789 600`', inline: false },
       { name: '`!sales`', value: 'View last 5 recent sales', inline: false },
       { name: '`!profit`', value: 'View total profit summary (all time)', inline: false },
       { name: '`!delete <OrderID>`', value: 'Delete an order\nExample: `!delete 5`', inline: false },
@@ -584,9 +732,12 @@ function handleHelp(message) {
       { name: '`!monthly [YYYY-MM]`', value: 'Monthly profit report (default this month)', inline: false },
       { name: '`!search <PlayerID>`', value: 'Find all orders for a player', inline: false },
       { name: '`!export`', value: 'Download all orders as CSV', inline: false },
+      { name: '`!updaterates`', value: 'Scrape supplier rate list (reply to supplier msg or paste list after command)', inline: false },
+      { name: '`!rates`', value: 'View saved supplier rates', inline: false },
       { name: '`!verify @user`', value: 'Verify a user to use the bot (admin only)', inline: false },
       { name: '`!unverify @user`', value: 'Remove verification from a user (admin only)', inline: false },
       { name: '`!verified`', value: 'List all verified users', inline: false },
+      { name: '`!verifytoggle [on|off]`', value: 'Toggle verified-only mode (owner/managers/verified)', inline: false },
       { name: '`!help`', value: 'Show this help message', inline: false }
     )
     .setTimestamp()
@@ -636,6 +787,12 @@ client.on('messageCreate', async (message) => {
     case 'export':
       await handleExport(message);
       break;
+    case 'updaterates':
+      await handleUpdateRates(message);
+      break;
+    case 'rates':
+      await handleRates(message);
+      break;
     case 'verify':
       await handleVerify(message, args);
       break;
@@ -644,6 +801,9 @@ client.on('messageCreate', async (message) => {
       break;
     case 'verified':
       await handleVerifiedList(message);
+      break;
+    case 'verifytoggle':
+      await handleVerifyToggle(message, args);
       break;
     case 'help':
       handleHelp(message);
@@ -667,6 +827,19 @@ client.on('error', (error) => {
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
+});
+
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  if (req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', bot: client.user ? client.user.tag : 'starting', provider: db.getProviderName(), uptime: process.uptime() }));
+  } else {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('Free Fire Top-Up Database bot is running.');
+  }
+}).listen(PORT, () => {
+  console.log(`Health server listening on port ${PORT}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);

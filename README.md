@@ -15,7 +15,7 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 
 | Command | Description |
 |---------|-------------|
-| `!add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]` | Add new order |
+| `!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]` | Add new order (rate auto-fills from saved rates) |
 | `!sales` | View last 5 recent sales |
 | `!profit` | View total profit summary |
 | `!delete <OrderID>` | Delete an order |
@@ -24,9 +24,12 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 | `!monthly [YYYY-MM]` | Monthly profit report (default this month) |
 | `!search <PlayerID>` | Find all orders for a player |
 | `!export` | Download all orders as CSV |
+| `!updaterates` | Scrape supplier rate list (reply to supplier msg or paste list after command) |
+| `!rates` | View saved supplier rates |
 | `!verify @user` | Verify a user (admin only) |
 | `!unverify @user` | Remove verification (admin only) |
 | `!verified` | List all verified users |
+| `!verifytoggle [on|off]` | Toggle verified-only mode (owner/managers/verified) |
 | `!help` | Show help message |
 
 ### Examples
@@ -39,7 +42,16 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 
 # Custom date and time
 !add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30
+
+# Auto-rate from saved supplier rates (run !updaterates first)
+!add WEEKLY 123456789 650
+
+# Scrape supplier rate list: reply to supplier message with !updaterates,
+# or paste the list after the command
 ```
+
+### Supplier Rates
+Reply to the supplier bot's rate message with `!updaterates` — products, rates, and categories are scraped and saved. `!rates` shows them. `!add` without a rate auto-fills from saved rates.
 
 ## Setup
 
@@ -103,6 +115,21 @@ CREATE TABLE verified_users (
   verified_by TEXT NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Supplier rates table
+CREATE TABLE rates (
+  product TEXT PRIMARY KEY,
+  rate NUMERIC NOT NULL,
+  category TEXT,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Bot settings table (e.g. verification on/off)
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 ```
 
 ### Discord Bot Setup
@@ -148,3 +175,16 @@ node cli.js export [filepath]
 - Never commit `.env` file
 - Bot owner (`OWNER_ID`) has automatic admin access
 - Verified users stored in database with audit trail
+
+## Deploy to Render (Free)
+1. Push repo to GitHub (includes `render.yaml` blueprint)
+2. Go to https://dashboard.render.com → **New +** → **Web Service** → connect repo
+3. Settings (auto-filled from `render.yaml`):
+   - Build Command: `npm install`
+   - Start Command: `npm start`
+   - Health Check Path: `/health`
+4. **Environment** tab → add keys:
+   - `DISCORD_TOKEN`, `OWNER_ID`
+   - `DB_PROVIDER=supabase`, `SUPABASE_URL`, `SUPABASE_KEY`
+5. **Create Web Service** → wait for `Logged in as ...` in Logs
+6. Free tier sleeps after ~15 min idle — keep alive with a free monitor (e.g. UptimeRobot) pinging `https://YOUR-APP.onrender.com/health` every 5–10 min
