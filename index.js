@@ -210,27 +210,44 @@ async function handleAddOrder(message, args) {
   }
 }
 
-async function handleSales(message) {
+async function handleSales(message, args) {
   if (!(await requireVerification(message))) return;
-  
-  try {
-    const data = await db.getRecentOrders(5);
 
-    if (!data || data.length === 0) {
+  const PAGE_SIZE = 5;
+  let page = 1;
+  if (args[0]) {
+    page = Number(args[0]);
+    if (!Number.isInteger(page) || page < 1) {
+      return reject(message, 'Invalid Page', 'Usage: `!sales [page]`\nExample: `!sales 2`');
+    }
+  }
+
+  try {
+    const all = await db.getAllOrders();
+
+    if (!all || all.length === 0) {
       return message.reply({
         embeds: [createInfoEmbed('No Sales', 'No orders found in the database.')],
       });
     }
 
+    const totalPages = Math.ceil(all.length / PAGE_SIZE);
+    if (page > totalPages) {
+      return reject(message, 'Invalid Page', `Only ${totalPages} page(s) available (${all.length} orders).`);
+    }
+
+    const data = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
     const embed = new EmbedBuilder()
       .setColor(Colors.Blue)
-      .setTitle('📊 Recent Sales (Last 5)')
-      .setTimestamp();
+      .setTitle(`📊 Sales - Page ${page}/${totalPages}`)
+      .setTimestamp()
+      .setFooter({ text: `Total ${all.length} orders • Use !sales ${page + 1} for next page` });
 
     data.forEach((order, index) => {
       const profit = order.price - order.rate;
       embed.addFields({
-        name: `#${index + 1} - ${order.product} (ID: ${order.id})`,
+        name: `#${(page - 1) * PAGE_SIZE + index + 1} - ${order.product} (ID: ${order.id})`,
         value: `Player: ${order.player_id}\nPrice: ${formatLKR(order.price)} | Rate: ${formatLKR(order.rate)} | Profit: ${formatLKR(profit)}\nDate: ${new Date(order.created_at).toLocaleString()}`,
         inline: false,
       });
@@ -238,6 +255,7 @@ async function handleSales(message) {
 
     await message.reply({ embeds: [embed] });
   } catch (err) {
+    if (err && err.rejected) throw err;
     console.error('Sales error:', err);
     await message.reply({
       embeds: [createErrorEmbed('Database Error', 'Failed to fetch sales. Please try again later.')],
@@ -723,7 +741,7 @@ function handleHelp(message) {
     .setDescription('Here are all available commands:')
     .addFields(
       { name: '`!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]`', value: 'Add a new order (rate auto-fills from saved rates)\nExample: `!add 100DB 123456789 350 290` or `!add WEEKLY 123456789 600`', inline: false },
-      { name: '`!sales`', value: 'View last 5 recent sales', inline: false },
+      { name: '`!sales [page]`', value: 'Browse sales, 5 per page\nExample: `!sales 2` for next page', inline: false },
       { name: '`!profit`', value: 'View total profit summary (all time)', inline: false },
       { name: '`!delete <OrderID>`', value: 'Delete an order\nExample: `!delete 5`', inline: false },
       { name: '`!edit <OrderID> <field> <value>`', value: 'Edit product, player_id, price or rate\nExample: `!edit 5 price 400`', inline: false },
@@ -763,7 +781,7 @@ client.on('messageCreate', async (message) => {
       await handleAddOrder(message, args);
       break;
     case 'sales':
-      await handleSales(message);
+      await handleSales(message, args);
       break;
     case 'profit':
       await handleProfit(message);

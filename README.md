@@ -16,7 +16,7 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 | Command | Description |
 |---------|-------------|
 | `!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]` | Add new order (rate auto-fills from saved rates) |
-| `!sales` | View last 5 recent sales |
+| `!sales [page]` | Browse sales, 5 per page (e.g. `!sales 2`) |
 | `!profit` | View total profit summary |
 | `!delete <OrderID>` | Delete an order |
 | `!edit <OrderID> <field> <value>` | Edit product, player_id, price or rate |
@@ -153,7 +153,7 @@ npm run cli -- help   # CLI mode (no Discord needed)
 ```bash
 node cli.js add 100DB 123456789 350 290
 node cli.js add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30
-node cli.js sales
+node cli.js sales [page]
 node cli.js profit
 node cli.js verify <UserID>
 node cli.js verified

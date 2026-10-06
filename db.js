@@ -37,6 +37,9 @@ function parseRateList(text) {
 
 function supabaseClient() {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) notConfigured('Supabase', 'Set SUPABASE_URL and SUPABASE_KEY.');
+  if (typeof WebSocket === 'undefined') {
+    try { global.WebSocket = require('ws'); } catch { /* ws optional on Node 22+ */ }
+  }
   const { createClient } = require('@supabase/supabase-js');
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 }

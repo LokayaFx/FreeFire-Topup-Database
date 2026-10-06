@@ -9,7 +9,7 @@ function printHelp() {
   console.log(`Free Fire Top-Up Database - CLI (provider: ${db.getProviderName()})
 Usage:
   node cli.js add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]
-  node cli.js sales
+  node cli.js sales [page]
   node cli.js profit
   node cli.js verify <UserID>
   node cli.js unverify <UserID>
@@ -114,15 +114,33 @@ async function cmdAdd(args) {
   }
 }
 
-async function cmdSales() {
+async function cmdSales(args) {
+  const PAGE_SIZE = 5;
+  let page = 1;
+  if (args[0]) {
+    page = Number(args[0]);
+    if (!Number.isInteger(page) || page < 1) {
+      console.error('Usage: node cli.js sales [page]');
+      process.exitCode = 1;
+      return;
+    }
+  }
   try {
-    const data = await db.getRecentOrders(5);
-    if (!data || data.length === 0) {
+    const all = await db.getAllOrders();
+    if (!all || all.length === 0) {
       console.log('No orders found.');
       return;
     }
+    const totalPages = Math.ceil(all.length / PAGE_SIZE);
+    if (page > totalPages) {
+      console.error(`Only ${totalPages} page(s) available (${all.length} orders).`);
+      process.exitCode = 1;
+      return;
+    }
+    const data = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    console.log(`Sales - Page ${page}/${totalPages} (Total ${all.length} orders)`);
     console.table(data.map((o, i) => ({
-      '#': i + 1,
+      '#': (page - 1) * PAGE_SIZE + i + 1,
       ID: o.id,
       Product: o.product,
       Player: o.player_id,
@@ -406,7 +424,7 @@ async function main() {
       await cmdAdd(args);
       break;
     case 'sales':
-      await cmdSales();
+      await cmdSales(args);
       break;
     case 'profit':
       await cmdProfit();
