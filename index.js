@@ -1,5 +1,4 @@
 require('dotenv').config();
-const http = require('http');
 const { Client, GatewayIntentBits, EmbedBuilder, Colors, AttachmentBuilder } = require('discord.js');
 const db = require('./db');
 
@@ -827,19 +826,6 @@ client.on('error', (error) => {
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
-});
-
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', bot: client.user ? client.user.tag : 'starting', provider: db.getProviderName(), uptime: process.uptime() }));
-  } else {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Free Fire Top-Up Database bot is running.');
-  }
-}).listen(PORT, () => {
-  console.log(`Health server listening on port ${PORT}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
