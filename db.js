@@ -38,6 +38,29 @@ const supabaseProvider = {
     if (error) throw error;
     return data || [];
   },
+  async getAllOrders() {
+    const sb = supabaseClient();
+    const { data, error } = await sb.from('orders').select('*').order('created_at', { ascending: false }).limit(1000);
+    if (error) throw error;
+    return data || [];
+  },
+  async getOrderById(id) {
+    const sb = supabaseClient();
+    const { data, error } = await sb.from('orders').select('*').eq('id', id).single();
+    if (error) throw error;
+    return data;
+  },
+  async deleteOrder(id) {
+    const sb = supabaseClient();
+    const { error } = await sb.from('orders').delete().eq('id', id);
+    if (error) throw error;
+  },
+  async updateOrder(id, patch) {
+    const sb = supabaseClient();
+    const { data, error } = await sb.from('orders').update(patch).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  },
   async isVerifiedUser(userId) {
     const sb = supabaseClient();
     const { data } = await sb.from('verified_users').select('user_id').eq('user_id', userId).single();
@@ -98,6 +121,30 @@ const jsonProvider = {
     const rows = readJson(this.ordersFile(), []);
     return rows.map((r) => ({ price: r.price, rate: r.rate }));
   },
+  async getAllOrders() {
+    const rows = readJson(this.ordersFile(), []);
+    return rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  },
+  async getOrderById(id) {
+    const rows = readJson(this.ordersFile(), []);
+    return rows.find((r) => String(r.id) === String(id)) || null;
+  },
+  async deleteOrder(id) {
+    const file = this.ordersFile();
+    const rows = readJson(file, []);
+    const next = rows.filter((r) => String(r.id) !== String(id));
+    if (next.length === rows.length) throw new Error('Order not found');
+    writeJson(file, next);
+  },
+  async updateOrder(id, patch) {
+    const file = this.ordersFile();
+    const rows = readJson(file, []);
+    const row = rows.find((r) => String(r.id) === String(id));
+    if (!row) throw new Error('Order not found');
+    Object.assign(row, patch);
+    writeJson(file, rows);
+    return row;
+  },
   async isVerifiedUser(userId) {
     const rows = readJson(this.verifiedFile(), []);
     return rows.some((r) => r.user_id === userId);
@@ -154,6 +201,35 @@ const sqliteProvider = {
     const rows = db.prepare('SELECT price, rate FROM orders').all();
     db.close();
     return rows;
+  },
+  async getAllOrders() {
+    const db = sqliteDb();
+    const rows = db.prepare('SELECT * FROM orders ORDER BY datetime(created_at) DESC LIMIT 1000').all();
+    db.close();
+    return rows;
+  },
+  async getOrderById(id) {
+    const db = sqliteDb();
+    const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    db.close();
+    return row || null;
+  },
+  async deleteOrder(id) {
+    const db = sqliteDb();
+    const info = db.prepare('DELETE FROM orders WHERE id = ?').run(id);
+    db.close();
+    if (!info.changes) throw new Error('Order not found');
+  },
+  async updateOrder(id, patch) {
+    const db = sqliteDb();
+    const allowed = ['product', 'player_id', 'price', 'rate', 'created_at'];
+    const keys = Object.keys(patch).filter((k) => allowed.includes(k));
+    if (!keys.length) { db.close(); throw new Error('Nothing to update'); }
+    const info = db.prepare(`UPDATE orders SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => patch[k]), id);
+    const row = db.prepare('SELECT * FROM orders WHERE id = ?').get(id);
+    db.close();
+    if (!info.changes) throw new Error('Order not found');
+    return row;
   },
   async isVerifiedUser(userId) {
     const db = sqliteDb();
@@ -213,6 +289,35 @@ const mysqlProvider = {
     await pool.end();
     return rows;
   },
+  async getAllOrders() {
+    const pool = await mysqlPool();
+    const [rows] = await pool.execute('SELECT * FROM orders ORDER BY created_at DESC LIMIT 1000');
+    await pool.end();
+    return rows;
+  },
+  async getOrderById(id) {
+    const pool = await mysqlPool();
+    const [rows] = await pool.execute('SELECT * FROM orders WHERE id = ?', [id]);
+    await pool.end();
+    return rows[0] || null;
+  },
+  async deleteOrder(id) {
+    const pool = await mysqlPool();
+    const [r] = await pool.execute('DELETE FROM orders WHERE id = ?', [id]);
+    await pool.end();
+    if (!r.affectedRows) throw new Error('Order not found');
+  },
+  async updateOrder(id, patch) {
+    const pool = await mysqlPool();
+    const allowed = ['product', 'player_id', 'price', 'rate', 'created_at'];
+    const keys = Object.keys(patch).filter((k) => allowed.includes(k));
+    if (!keys.length) { await pool.end(); throw new Error('Nothing to update'); }
+    const [r] = await pool.execute(`UPDATE orders SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`, [...keys.map((k) => patch[k]), id]);
+    const [rows] = await pool.execute('SELECT * FROM orders WHERE id = ?', [id]);
+    await pool.end();
+    if (!r.affectedRows) throw new Error('Order not found');
+    return rows[0];
+  },
   async isVerifiedUser(userId) {
     const pool = await mysqlPool();
     const [rows] = await pool.execute('SELECT user_id FROM verified_users WHERE user_id = ?', [userId]);
@@ -270,6 +375,34 @@ const postgresProvider = {
     await pool.end();
     return rows;
   },
+  async getAllOrders() {
+    const pool = await pgPool();
+    const { rows } = await pool.query('SELECT * FROM orders ORDER BY created_at DESC LIMIT 1000');
+    await pool.end();
+    return rows;
+  },
+  async getOrderById(id) {
+    const pool = await pgPool();
+    const { rows } = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+    await pool.end();
+    return rows[0] || null;
+  },
+  async deleteOrder(id) {
+    const pool = await pgPool();
+    const r = await pool.query('DELETE FROM orders WHERE id = $1', [id]);
+    await pool.end();
+    if (!r.rowCount) throw new Error('Order not found');
+  },
+  async updateOrder(id, patch) {
+    const pool = await pgPool();
+    const allowed = ['product', 'player_id', 'price', 'rate', 'created_at'];
+    const keys = Object.keys(patch).filter((k) => allowed.includes(k));
+    if (!keys.length) { await pool.end(); throw new Error('Nothing to update'); }
+    const { rows } = await pool.query(`UPDATE orders SET ${keys.map((k, i) => `${k} = $${i + 1}`).join(', ')} WHERE id = $${keys.length + 1} RETURNING *`, [...keys.map((k) => patch[k]), id]);
+    await pool.end();
+    if (!rows[0]) throw new Error('Order not found');
+    return rows[0];
+  },
   async isVerifiedUser(userId) {
     const pool = await pgPool();
     const { rows } = await pool.query('SELECT user_id FROM verified_users WHERE user_id = $1', [userId]);
@@ -326,6 +459,41 @@ const mongoProvider = {
     const rows = await db.collection('orders').find({}, { projection: { price: 1, rate: 1 } }).toArray();
     await client.close();
     return rows;
+  },
+  async getAllOrders() {
+    const { client, db } = await mongoDb();
+    const rows = await db.collection('orders').find({}).sort({ created_at: -1 }).limit(1000).toArray();
+    await client.close();
+    return rows.map((r) => ({ ...r, id: r._id }));
+  },
+  async getOrderById(id) {
+    const { client, db } = await mongoDb();
+    let row = null;
+    try {
+      const { ObjectId } = require('mongodb');
+      row = await db.collection('orders').findOne({ _id: new ObjectId(id) });
+    } catch { row = null; }
+    await client.close();
+    return row ? { ...row, id: row._id } : null;
+  },
+  async deleteOrder(id) {
+    const { client, db } = await mongoDb();
+    const { ObjectId } = require('mongodb');
+    const r = await db.collection('orders').deleteOne({ _id: new ObjectId(id) });
+    await client.close();
+    if (!r.deletedCount) throw new Error('Order not found');
+  },
+  async updateOrder(id, patch) {
+    const { client, db } = await mongoDb();
+    const { ObjectId } = require('mongodb');
+    const allowed = ['product', 'player_id', 'price', 'rate', 'created_at'];
+    const set = {};
+    for (const k of allowed) if (patch[k] !== undefined) set[k] = patch[k];
+    const r = await db.collection('orders').updateOne({ _id: new ObjectId(id) }, { $set: set });
+    const row = await db.collection('orders').findOne({ _id: new ObjectId(id) });
+    await client.close();
+    if (!r.matchedCount) throw new Error('Order not found');
+    return { ...row, id: row._id };
   },
   async isVerifiedUser(userId) {
     const { client, db } = await mongoDb();
@@ -387,6 +555,26 @@ const firebaseProvider = {
     const snap = await db.collection('orders').select('price', 'rate').get();
     return snap.docs.map((d) => d.data());
   },
+  async getAllOrders() {
+    const db = firebaseDb();
+    const snap = await db.collection('orders').orderBy('created_at', 'desc').limit(1000).get();
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  },
+  async getOrderById(id) {
+    const db = firebaseDb();
+    const snap = await db.collection('orders').doc(String(id)).get();
+    return snap.exists ? { id: snap.id, ...snap.data() } : null;
+  },
+  async deleteOrder(id) {
+    const db = firebaseDb();
+    await db.collection('orders').doc(String(id)).delete();
+  },
+  async updateOrder(id, patch) {
+    const db = firebaseDb();
+    await db.collection('orders').doc(String(id)).update(patch);
+    const snap = await db.collection('orders').doc(String(id)).get();
+    return { id: snap.id, ...snap.data() };
+  },
   async isVerifiedUser(userId) {
     const db = firebaseDb();
     const snap = await db.collection('verified_users').doc(userId).get();
@@ -440,6 +628,19 @@ const sheetsProvider = {
     const { sheets, id } = await sheetsClient();
     const res = await sheets.spreadsheets.values.get({ spreadsheetId: id, range: 'orders!A:F' });
     return (res.data.values || []).slice(1).map((r) => ({ price: r[3], rate: r[4] }));
+  },
+  async getAllOrders() {
+    return this.getRecentOrders(1000);
+  },
+  async getOrderById(id) {
+    const rows = await this.getAllOrders();
+    return rows.find((r) => String(r.id) === String(id)) || null;
+  },
+  async deleteOrder() {
+    throw new Error('Sheets delete needs manual row delete. Remove the row from the orders sheet.');
+  },
+  async updateOrder() {
+    throw new Error('Sheets update needs manual edit. Edit the row in the orders sheet.');
   },
   async isVerifiedUser(userId) {
     const { sheets, id } = await sheetsClient();
@@ -504,6 +705,34 @@ module.exports = {
   },
   getRecentOrders(limit) { return primary().getRecentOrders(limit); },
   getAllOrderPrices() { return primary().getAllOrderPrices(); },
+  getAllOrders() { return primary().getAllOrders(); },
+  getOrderById(id) { return primary().getOrderById(id); },
+  async deleteOrder(id) {
+    await primary().deleteOrder(id);
+    for (const m of mirrors()) {
+      try { if (m.deleteOrder) await m.deleteOrder(id); } catch (e) { console.error('Mirror deleteOrder failed:', e.message); }
+    }
+  },
+  async updateOrder(id, patch) {
+    const row = await primary().updateOrder(id, patch);
+    for (const m of mirrors()) {
+      try { if (m.updateOrder) await m.updateOrder(id, patch); } catch (e) { console.error('Mirror updateOrder failed:', e.message); }
+    }
+    return row;
+  },
+  async searchOrdersByPlayer(playerId) {
+    const rows = await primary().getAllOrders();
+    return rows.filter((r) => String(r.player_id) === String(playerId));
+  },
+  async getOrdersInRange(startISO, endISO) {
+    const rows = await primary().getAllOrders();
+    const s = new Date(startISO).getTime();
+    const e = new Date(endISO).getTime();
+    return rows.filter((r) => {
+      const t = new Date(r.created_at).getTime();
+      return t >= s && t <= e;
+    });
+  },
   isVerifiedUser(userId) { return primary().isVerifiedUser(userId); },
   async verifyUser(userId, verifiedBy) {
     await primary().verifyUser(userId, verifiedBy);

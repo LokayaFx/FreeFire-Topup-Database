@@ -14,6 +14,12 @@ Usage:
   node cli.js verify <UserID>
   node cli.js unverify <UserID>
   node cli.js verified
+  node cli.js delete <OrderID>
+  node cli.js edit <OrderID> <field> <value>
+  node cli.js daily [YYYY-MM-DD]
+  node cli.js monthly [YYYY-MM]
+  node cli.js search <PlayerID>
+  node cli.js export [filepath]
   node cli.js help
 Examples:
   node cli.js add 100DB 123456789 350 290
@@ -170,6 +176,146 @@ async function cmdVerified() {
   }
 }
 
+function summarize(rows) {
+  const revenue = rows.reduce((s, o) => s + Number(o.price), 0);
+  const cost = rows.reduce((s, o) => s + Number(o.rate), 0);
+  return { count: rows.length, revenue, cost, profit: revenue - cost };
+}
+
+function printSummary(label, rows) {
+  const s = summarize(rows);
+  console.log(`${label}`);
+  console.log(`Orders: ${s.count} | Revenue: ${formatLKR(s.revenue)} | Cost: ${formatLKR(s.cost)} | Net Profit: ${formatLKR(s.profit)}`);
+}
+
+async function cmdDelete(args) {
+  if (!args[0]) {
+    console.error('Usage: node cli.js delete <OrderID>');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const existing = await db.getOrderById(args[0]);
+    if (!existing) {
+      console.error(`No order found with ID: ${args[0]}`);
+      process.exitCode = 1;
+      return;
+    }
+    await db.deleteOrder(args[0]);
+    console.log(`Deleted order ${existing.id} (${existing.product}, player ${existing.player_id}).`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdEdit(args) {
+  if (args.length < 3) {
+    console.error('Usage: node cli.js edit <OrderID> <field> <value>  (fields: product, player_id, price, rate)');
+    process.exitCode = 1;
+    return;
+  }
+  const allowed = ['product', 'player_id', 'price', 'rate'];
+  if (!allowed.includes(args[1])) {
+    console.error(`Field must be one of: ${allowed.join(', ')}`);
+    process.exitCode = 1;
+    return;
+  }
+  const patch = {};
+  if (args[1] === 'price' || args[1] === 'rate') {
+    const num = Number(args.slice(2).join(' '));
+    if (isNaN(num) || num <= 0) {
+      console.error(`${args[1]} must be a number greater than 0.`);
+      process.exitCode = 1;
+      return;
+    }
+    patch[args[1]] = num;
+  } else {
+    patch[args[1]] = args.slice(2).join(' ');
+  }
+  try {
+    const updated = await db.updateOrder(args[0], patch);
+    console.log(`Updated order ${updated.id}: ${updated.product} | Player: ${updated.player_id} | Price: ${formatLKR(updated.price)} | Rate: ${formatLKR(updated.rate)}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdDaily(args) {
+  let day = new Date();
+  if (args[0]) {
+    const p = args[0].split('-');
+    if (p.length !== 3) { console.error('Use format: node cli.js daily YYYY-MM-DD'); process.exitCode = 1; return; }
+    day = new Date(p[0], p[1] - 1, p[2]);
+  }
+  const start = new Date(day); start.setHours(0, 0, 0, 0);
+  const end = new Date(day); end.setHours(23, 59, 59, 999);
+  try {
+    const rows = await db.getOrdersInRange(start.toISOString(), end.toISOString());
+    if (!rows.length) { console.log(`No orders for ${start.toLocaleDateString()}.`); return; }
+    printSummary(`Daily ${start.toLocaleDateString()}`, rows);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdMonthly(args) {
+  const now = new Date();
+  let year = now.getFullYear(), month = now.getMonth();
+  if (args[0]) {
+    const p = args[0].split('-');
+    if (p.length !== 2) { console.error('Use format: node cli.js monthly YYYY-MM'); process.exitCode = 1; return; }
+    year = Number(p[0]); month = Number(p[1]) - 1;
+  }
+  const start = new Date(year, month, 1); start.setHours(0, 0, 0, 0);
+  const end = new Date(year, month + 1, 0); end.setHours(23, 59, 59, 999);
+  try {
+    const rows = await db.getOrdersInRange(start.toISOString(), end.toISOString());
+    if (!rows.length) { console.log(`No orders for ${year}-${String(month + 1).padStart(2, '0')}.`); return; }
+    printSummary(`Monthly ${year}-${String(month + 1).padStart(2, '0')}`, rows);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdSearch(args) {
+  if (!args[0]) {
+    console.error('Usage: node cli.js search <PlayerID>');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const rows = await db.searchOrdersByPlayer(args[0]);
+    if (!rows.length) { console.log(`No orders for player: ${args[0]}`); return; }
+    console.table(rows.map((o, i) => ({ '#': i + 1, ID: o.id, Product: o.product, Price: Number(o.price), Rate: Number(o.rate), Profit: Number(o.price) - Number(o.rate), Date: new Date(o.created_at).toLocaleString() })));
+    const s = summarize(rows);
+    console.log(`Total: ${rows.length} orders | Spent: ${formatLKR(s.revenue)} | Profit: ${formatLKR(s.profit)}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function cmdExport(args) {
+  const fs = require('fs');
+  try {
+    const rows = await db.getAllOrders();
+    if (!rows.length) { console.log('No orders to export.'); return; }
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = ['id,product,player_id,price,rate,profit,created_at'];
+    for (const o of rows) lines.push([o.id, esc(o.product), esc(o.player_id), o.price, o.rate, Number(o.price) - Number(o.rate), esc(o.created_at)].join(','));
+    const out = args[0] || `orders-${new Date().toISOString().slice(0, 10)}.csv`;
+    fs.writeFileSync(out, lines.join('\n'), 'utf8');
+    console.log(`Exported ${rows.length} orders to ${out}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = (args.shift() || 'help').toLowerCase();
@@ -191,6 +337,24 @@ async function main() {
       break;
     case 'verified':
       await cmdVerified();
+      break;
+    case 'delete':
+      await cmdDelete(args);
+      break;
+    case 'edit':
+      await cmdEdit(args);
+      break;
+    case 'daily':
+      await cmdDaily(args);
+      break;
+    case 'monthly':
+      await cmdMonthly(args);
+      break;
+    case 'search':
+      await cmdSearch(args);
+      break;
+    case 'export':
+      await cmdExport(args);
       break;
     case 'help':
     default:

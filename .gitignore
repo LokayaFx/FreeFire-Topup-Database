@@ -32,3 +32,6 @@ build/
 data/
 *.db
 *.sqlite
+
+# Exported files
+*.csv

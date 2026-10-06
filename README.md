@@ -18,6 +18,12 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 | `!add <Product> <PlayerID> <Price> <Rate> [-d YYYY-MM-DD] [-t HH:MM]` | Add new order |
 | `!sales` | View last 5 recent sales |
 | `!profit` | View total profit summary |
+| `!delete <OrderID>` | Delete an order |
+| `!edit <OrderID> <field> <value>` | Edit product, player_id, price or rate |
+| `!daily [YYYY-MM-DD]` | Daily profit report (default today) |
+| `!monthly [YYYY-MM]` | Monthly profit report (default this month) |
+| `!search <PlayerID>` | Find all orders for a player |
+| `!export` | Download all orders as CSV |
 | `!verify @user` | Verify a user (admin only) |
 | `!unverify @user` | Remove verification (admin only) |
 | `!verified` | List all verified users |
@@ -124,6 +130,12 @@ node cli.js sales
 node cli.js profit
 node cli.js verify <UserID>
 node cli.js verified
+node cli.js delete <OrderID>
+node cli.js edit <OrderID> <field> <value>
+node cli.js daily [YYYY-MM-DD]
+node cli.js monthly [YYYY-MM]
+node cli.js search <PlayerID>
+node cli.js export [filepath]
 ```
 
 ## Tech Stack
