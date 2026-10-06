@@ -85,7 +85,7 @@ DB_MIRROR=json,sheets
 ```
 
 ### Database Setup
-Supabase selected nam me SQL run karanna:
+Supabase selected SQL run:
 ```sql
 -- Orders table
 CREATE TABLE orders (
