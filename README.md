@@ -13,6 +13,8 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 
 ## Commands
 
+Both `!` prefix and `/` slash commands work. Register slash commands once with `npm run deploy` (needs `CLIENT_ID` in `.env`; add `GUILD_ID` for instant server registration, otherwise global up to 1 hour).
+
 | Command | Description |
 |---------|-------------|
 | `!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]` | Add new order (rate auto-fills from saved rates) |
@@ -30,6 +32,7 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 | `!unverify @user` | Remove verification (admin only) |
 | `!verified` | List all verified users |
 | `!verifytoggle [on|off]` | Toggle verified-only mode (owner/managers/verified) |
+| `!player <UID> [region]` | Look up player name, level, ranks, guild |
 | `!help` | Show help message |
 
 ### Examples
@@ -52,6 +55,9 @@ A production-ready Discord bot for managing Free Fire diamond top-up orders with
 
 ### Supplier Rates
 Reply to the supplier bot's rate message with `!updaterates` — products, rates, and categories are scraped and saved. `!rates` shows them. `!add` without a rate auto-fills from saved rates.
+
+### Player Lookup
+Uses your Free Fire ID lookup API (`FF_API_URL`, default `https://freefire-idinfo.vercel.app`). `!player <UID>` shows nickname, level, likes, region, BR/CS points, guild, and bio. `!add` also auto-fills the player name when lookup succeeds.
 
 ## Setup
 
@@ -150,6 +156,7 @@ npm run cli -- help   # CLI mode (no Discord needed)
 ```
 
 ### CLI Mode (Terminal)
+One-shot commands:
 ```bash
 node cli.js add 100DB 123456789 350 290
 node cli.js add 100DB 123456789 350 290 -d 2026-10-05 -t 14:30
@@ -163,6 +170,13 @@ node cli.js daily [YYYY-MM-DD]
 node cli.js monthly [YYYY-MM]
 node cli.js search <PlayerID>
 node cli.js export [filepath]
+```
+
+Interactive shell (type `!` commands directly, `exit` to quit):
+```bash
+npm run shell
+# topup> !add WEEKLY 123456789 650
+# topup> !sales 2
 ```
 
 ## Tech Stack

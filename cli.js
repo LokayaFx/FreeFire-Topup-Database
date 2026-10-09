@@ -1,5 +1,6 @@
 require('dotenv').config();
 const db = require('./db');
+const { lookupPlayer } = require('./player');
 
 function formatLKR(amount) {
   return `LKR ${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -23,6 +24,7 @@ Usage:
   node cli.js updaterates <file>
   node cli.js rates
   node cli.js verifytoggle [on|off]
+  node cli.js player <UID> [region]
   node cli.js help
 Examples:
   node cli.js add 100DB 123456789 350 290
@@ -394,8 +396,7 @@ async function cmdRates() {
   }
 }
 
-async function cmdVerifyToggle(args) {
-  const mode = (args[0] || '').toLowerCase();
+async function cmdVerifyToggle(args) {  const mode = (args[0] || '').toLowerCase();
   try {
     if (!mode) {
       const s = await db.getSetting('verification');
@@ -416,9 +417,25 @@ async function cmdVerifyToggle(args) {
   }
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-  const command = (args.shift() || 'help').toLowerCase();
+async function cmdPlayer(args) {
+  if (!args[0]) {
+    console.error('Usage: node cli.js player <UID> [region]');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const p = await lookupPlayer(args[0], args[1]);
+    console.log(`${p.nickname} | UID: ${p.uid} | Lv ${p.level} | Likes: ${Number(p.likes || 0).toLocaleString()} | Region: ${p.region || '-'}`);
+    console.log(`BR: ${Number(p.brPoints || 0).toLocaleString()} pts | CS: ${Number(p.csPoints || 0).toLocaleString()} pts`);
+    if (p.guild) console.log(`Guild: ${p.guild} (Lv ${p.guildLevel ?? '-'} • ${p.guildMembers ?? '-'} members)`);
+    if (p.bio) console.log(`Bio: ${p.bio}`);
+  } catch (e) {
+    console.error('Lookup Failed:', e.message);
+    process.exitCode = 1;
+  }
+}
+
+async function dispatch(command, args) {
   switch (command) {
     case 'add':
       await cmdAdd(args);
@@ -465,11 +482,56 @@ async function main() {
     case 'verifytoggle':
       await cmdVerifyToggle(args);
       break;
+    case 'player':
+      await cmdPlayer(args);
+      break;
     case 'help':
     default:
       printHelp();
       break;
   }
+}
+
+async function interactive() {
+  const readline = require('readline');
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: 'topup> ' });
+  console.log(`Free Fire Top-Up Database shell (provider: ${db.getProviderName()}). Type commands like !add, !sales. Type exit to quit.`);
+  let chain = Promise.resolve();
+  let closed = false;
+  rl.on('close', () => { closed = true; });
+  rl.on('line', (line) => {
+    chain = chain.then(async () => {
+      if (closed) return;
+      const text = line.trim();
+      if (/^(exit|quit)$/i.test(text)) {
+        closed = true;
+        rl.close();
+        return;
+      }
+      if (text) {
+        const content = text.startsWith('!') ? text.slice(1) : text;
+        const parts = content.trim().split(/ +/);
+        const cmd = (parts.shift() || '').toLowerCase();
+        try {
+          await dispatch(cmd, parts);
+        } catch (e) {
+          console.error(e.message || e);
+        }
+      }
+      if (!closed) rl.prompt();
+    });
+  });
+  rl.prompt();
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.length === 0) {
+    await interactive();
+    return;
+  }
+  const command = (args.shift() || 'help').toLowerCase();
+  await dispatch(command, args);
 }
 
 main().catch((e) => {

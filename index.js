@@ -1,6 +1,25 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, Colors, AttachmentBuilder } = require('discord.js');
+const fs = require('fs');
+const path = require('path');
+const { Client, GatewayIntentBits, EmbedBuilder, Colors, AttachmentBuilder, Collection } = require('discord.js');
 const db = require('./db');
+const { lookupPlayer } = require('./player');
+
+const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
+try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+function logFile() {
+  return path.join(LOG_DIR, `bot-${new Date().toISOString().slice(0, 10)}.log`);
+}
+function saveLog(level, args) {
+  try {
+    const text = args.map((a) => (a && a.stack ? a.stack : String(a))).join(' ');
+    fs.appendFileSync(logFile(), `[${level}] ${new Date().toISOString()} ${text}\n`);
+  } catch { /* ignore */ }
+}
+const _consoleLog = console.log.bind(console);
+const _consoleError = console.error.bind(console);
+console.log = (...args) => { _consoleLog(...args); saveLog('LOG', args); };
+console.error = (...args) => { _consoleError(...args); saveLog('ERR', args); };
 
 const client = new Client({
   intents: [
@@ -179,25 +198,33 @@ async function handleAddOrder(message, args) {
   const profit = price - rate;
 
   try {
-    const data = await db.addOrder({
-      product,
-      player_id: playerId,
-      price,
-      rate,
-      created_at: createdAt.toISOString(),
-    });
+    const [data, playerInfo] = await Promise.all([
+      db.addOrder({
+        product,
+        player_id: playerId,
+        price,
+        rate,
+        created_at: createdAt.toISOString(),
+      }),
+      lookupPlayer(playerId, null, 8000).catch(() => null),
+    ]);
+
+    const fields = [
+      { name: 'Product', value: product, inline: true },
+      { name: 'Player ID', value: playerId, inline: true },
+    ];
+    if (playerInfo) fields.push({ name: 'Player Name', value: playerInfo.nickname, inline: true });
+    fields.push(
+      { name: 'Price', value: formatLKR(price), inline: true },
+      { name: 'Rate', value: formatLKR(rate), inline: true },
+      { name: 'Profit', value: formatLKR(profit), inline: true },
+      { name: 'Order ID', value: String(data.id), inline: true }
+    );
 
     const embed = new EmbedBuilder()
       .setColor(Colors.Green)
       .setTitle('📦 New Order Added')
-      .addFields(
-        { name: 'Product', value: product, inline: true },
-        { name: 'Player ID', value: playerId, inline: true },
-        { name: 'Price', value: formatLKR(price), inline: true },
-        { name: 'Rate', value: formatLKR(rate), inline: true },
-        { name: 'Profit', value: formatLKR(profit), inline: true },
-        { name: 'Order ID', value: String(data.id), inline: true }
-      )
+      .addFields(fields)
       .setTimestamp(createdAt)
       .setFooter({ text: `Added by ${message.author.tag}` });
 
@@ -734,11 +761,45 @@ async function handleVerifyToggle(message, args) {
   }
 }
 
+async function handlePlayer(message, args) {
+  if (!(await requireVerification(message))) return;
+
+  if (!args[0]) {
+    return reject(message, 'Invalid Usage', 'Usage: `!player <UID> [region]`\nExample: `!player 4422076728`');
+  }
+
+  try {
+    const p = await lookupPlayer(args[0], args[1]);
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blue)
+      .setTitle(`🎮 ${p.nickname}`)
+      .addFields(
+        { name: 'UID', value: String(p.uid), inline: true },
+        { name: 'Level', value: String(p.level ?? '-'), inline: true },
+        { name: 'Likes', value: Number(p.likes || 0).toLocaleString(), inline: true },
+        { name: 'Region', value: String(p.region || '-'), inline: true },
+        { name: 'BR Points', value: Number(p.brPoints || 0).toLocaleString(), inline: true },
+        { name: 'CS Points', value: Number(p.csPoints || 0).toLocaleString(), inline: true }
+      )
+      .setTimestamp();
+    if (p.guild) embed.addFields({ name: 'Guild', value: `${p.guild} (Lv ${p.guildLevel ?? '-'} • ${p.guildMembers ?? '-'} members)`, inline: false });
+    if (p.bio) embed.addFields({ name: 'Bio', value: String(p.bio).slice(0, 500), inline: false });
+    if (p.avatarUrl) embed.setThumbnail(p.avatarUrl);
+    await message.reply({ embeds: [embed] });
+  } catch (err) {
+    if (err && err.rejected) throw err;
+    console.error('Player lookup error:', err);
+    await message.reply({
+      embeds: [createErrorEmbed('Lookup Failed', err.message || 'Could not fetch player info.')],
+    });
+  }
+}
+
 function handleHelp(message) {
   const embed = new EmbedBuilder()
     .setColor(Colors.Gold)
     .setTitle('🤖 Free Fire Top-Up Database - Commands')
-    .setDescription('Here are all available commands:')
+    .setDescription('Works with `!` prefix and `/` slash commands.')
     .addFields(
       { name: '`!add <Product> <PlayerID> <Price> [Rate] [-d YYYY-MM-DD] [-t HH:MM]`', value: 'Add a new order (rate auto-fills from saved rates)\nExample: `!add 100DB 123456789 350 290` or `!add WEEKLY 123456789 600`', inline: false },
       { name: '`!sales [page]`', value: 'Browse sales, 5 per page\nExample: `!sales 2` for next page', inline: false },
@@ -751,6 +812,7 @@ function handleHelp(message) {
       { name: '`!export`', value: 'Download all orders as CSV', inline: false },
       { name: '`!updaterates`', value: 'Scrape supplier rate list (reply to supplier msg or paste list after command)', inline: false },
       { name: '`!rates`', value: 'View saved supplier rates', inline: false },
+      { name: '`!player <UID> [region]`', value: 'Look up player name, level, ranks, guild', inline: false },
       { name: '`!verify @user`', value: 'Verify a user to use the bot (admin only)', inline: false },
       { name: '`!unverify @user`', value: 'Remove verification from a user (admin only)', inline: false },
       { name: '`!verified`', value: 'List all verified users', inline: false },
@@ -767,12 +829,89 @@ client.once('ready', () => {
   logLine(`Logged in as ${client.user.tag} | provider: ${db.getProviderName()}`);
 });
 
-client.on('messageCreate', async (message) => {
-  if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+function slashToMessage(interaction) {
+  const name = interaction.commandName;
+  const str = (n) => {
+    const o = interaction.options.get(n);
+    return o === null || o === undefined ? null : String(o.value);
+  };
+  let args = [];
+  switch (name) {
+    case 'add': {
+      args = [str('product'), str('playerid'), str('price')];
+      const rate = interaction.options.getNumber('rate');
+      if (rate !== null && rate !== undefined) args.push(String(rate));
+      const date = str('date');
+      const time = str('time');
+      if (date) args.push('-d', date);
+      if (time) args.push('-t', time);
+      break;
+    }
+    case 'sales': {
+      const p = interaction.options.getInteger('page');
+      if (p) args = [String(p)];
+      break;
+    }
+    case 'delete':
+      args = [String(interaction.options.getInteger('order_id'))];
+      break;
+    case 'edit':
+      args = [String(interaction.options.getInteger('order_id')), str('field'), str('value')];
+      break;
+    case 'daily': {
+      const d = str('date');
+      if (d) args = [d];
+      break;
+    }
+    case 'monthly': {
+      const m = str('month');
+      if (m) args = [m];
+      break;
+    }
+    case 'search':
+      args = [str('player_id')];
+      break;
+    case 'player': {
+      args = [str('uid')];
+      const r = str('region');
+      if (r) args.push(r);
+      break;
+    }
+    case 'verifytoggle': {
+      const m = str('mode');
+      if (m) args = [m];
+      break;
+    }
+    default:
+      break;
+  }
+  let content = `!${name}` + (args.length ? ' ' + args.join(' ') : '');
+  if (name === 'updaterates') {
+    const t = str('text');
+    if (t) content += '\n' + t;
+  }
+  const message = {
+    author: interaction.user,
+    content,
+    guild: interaction.guild,
+    channel: interaction.channel,
+    member: interaction.member,
+    reference: undefined,
+    reply: async (payload) => {
+      if (interaction.replied) return interaction.followUp(payload);
+      try { return await interaction.editReply(payload); } catch { return interaction.followUp(payload); }
+    },
+  };
+  if (name === 'verify' || name === 'unverify') {
+    const user = interaction.options.getUser('user');
+    message.mentions = { users: new Collection([[user.id, user]]) };
+  } else {
+    message.mentions = { users: new Collection() };
+  }
+  return { message, command: name, args };
+}
 
-  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-  const command = args.shift().toLowerCase();
-
+async function routeCommand(message, command, args) {
   logCommand(message, command, args);
 
   try {
@@ -810,6 +949,9 @@ client.on('messageCreate', async (message) => {
     case 'rates':
       await handleRates(message);
       break;
+    case 'player':
+      await handlePlayer(message, args);
+      break;
     case 'verify':
       await handleVerify(message, args);
       break;
@@ -836,6 +978,28 @@ client.on('messageCreate', async (message) => {
     if (err && err.rejected) return;
     logLine(`FAIL !${command} by ${message.author.tag}:`, err && err.message ? err.message : err);
   }
+}
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+
+  const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+  const command = args.shift().toLowerCase();
+
+  await routeCommand(message, command, args);
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
+
+  try {
+    await interaction.deferReply();
+  } catch {
+    return;
+  }
+  const { message, command, args } = slashToMessage(interaction);
+  logLine(`SLASH /${command} by ${message.author.tag} (${message.author.id})`);
+  await routeCommand(message, command, args);
 });
 
 client.on('error', (error) => {
