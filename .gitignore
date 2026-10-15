@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 
+# JS leftovers (this is the Python branch)
+node_modules/
+
 # Logs
 logs/
 *.log
