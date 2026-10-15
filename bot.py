@@ -295,9 +295,13 @@ def core_sales(page):
     em.set_footer(text=f"Total {len(rows)} orders • Use !sales {page + 1} for next page")
     for i, o in enumerate(chunk):
         profit = float(o["price"]) - float(o["rate"])
+        try:
+            dt = datetime.fromisoformat(o["created_at"]).strftime("%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            dt = str(o.get("created_at", "-"))
         em.add_field(
             name=f'#{(page - 1) * PAGE_SIZE + i + 1} - {o["product"]} (ID: {o["id"]})',
-            value=f'Player: {o["player_id"]}\nPrice: {fmt_lkr(o["price"])} | Rate: {fmt_lkr(o["rate"])} | Profit: {fmt_lkr(profit)}',
+            value=f'Player: {o["player_id"]}\nPrice: {fmt_lkr(o["price"])} | Rate: {fmt_lkr(o["rate"])} | Profit: {fmt_lkr(profit)}\nDate: {dt}',
             inline=False,
         )
     return em
@@ -378,7 +382,13 @@ def core_search(player_id):
     if not rows:
         return info_embed("No Orders", f"No orders found for player: {player_id}")
     n, revenue, cost, profit = summarize(rows)
-    lines = [f'#{r["id"]} {r["product"]} | {fmt_lkr(r["price"])} | Profit: {fmt_lkr(float(r["price"]) - float(r["rate"]))}' for r in rows[:10]]
+    lines = []
+    for r in rows[:10]:
+        try:
+            dt = datetime.fromisoformat(r["created_at"]).strftime("%Y-%m-%d")
+        except (ValueError, TypeError):
+            dt = str(r.get("created_at", "-"))
+        lines.append(f'#{r["id"]} {r["product"]} | {fmt_lkr(r["price"])} | Profit: {fmt_lkr(float(r["price"]) - float(r["rate"]))} | {dt}')
     em = discord.Embed(title=f"🔍 Orders for {player_id} ({n})", description="\n".join(lines), color=BLUE, timestamp=now())
     em.add_field(name="Total Spent", value=fmt_lkr(revenue), inline=True)
     em.add_field(name="Total Profit", value=fmt_lkr(profit), inline=True)
