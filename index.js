@@ -795,6 +795,49 @@ async function handlePlayer(message, args) {
   }
 }
 
+async function handleHistory(message, args) {
+  if (!(await requireVerification(message))) return;
+
+  let limit = 20;
+  let product = null;
+  let player = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-p' || args[i] === '--product') { product = args[i + 1]; i++; }
+    else if (args[i] === '-u' || args[i] === '--player') { player = args[i + 1]; i++; }
+    else if (!isNaN(Number(args[i]))) limit = Math.min(Math.max(Number(args[i]), 1), 50);
+    else return reject(message, 'Invalid Usage', 'Usage: `!history [limit] [-p Product] [-u PlayerID]`\nExample: `!history 30 -p WEEKLY`');
+  }
+
+  try {
+    let rows = await db.getAllOrders();
+    if (product) rows = rows.filter((r) => String(r.product).toUpperCase() === String(product).toUpperCase());
+    if (player) rows = rows.filter((r) => String(r.player_id) === String(player));
+    if (!rows.length) {
+      return message.reply({
+        embeds: [createInfoEmbed('No History', 'No orders match the filters.')],
+      });
+    }
+    const shown = rows.slice(0, limit);
+    const s = summarizeOrders(shown);
+    const embed = new EmbedBuilder()
+      .setColor(Colors.Blue)
+      .setTitle(`📜 Order History (${shown.length}/${rows.length})`)
+      .setDescription(shown.map((o, i) => `${i + 1}. #${o.id} ${o.product} | ${o.player_id} | ${formatLKR(o.price)} | +${formatLKR(Number(o.price) - Number(o.rate))} | ${new Date(o.created_at).toLocaleDateString()}`).join('\n').slice(0, 4000))
+      .addFields(
+        { name: 'Revenue', value: formatLKR(s.revenue), inline: true },
+        { name: 'Net Profit', value: formatLKR(s.profit), inline: true }
+      )
+      .setTimestamp();
+    await message.reply({ embeds: [embed] });
+  } catch (err) {
+    if (err && err.rejected) throw err;
+    console.error('History error:', err);
+    await message.reply({
+      embeds: [createErrorEmbed('Database Error', 'Failed to fetch history.')],
+    });
+  }
+}
+
 function handleHelp(message) {
   const embed = new EmbedBuilder()
     .setColor(Colors.Gold)
@@ -813,6 +856,7 @@ function handleHelp(message) {
       { name: '`!updaterates`', value: 'Scrape supplier rate list (reply to supplier msg or paste list after command)', inline: false },
       { name: '`!rates`', value: 'View saved supplier rates', inline: false },
       { name: '`!player <UID> [region]`', value: 'Look up player name, level, ranks, guild', inline: false },
+      { name: '`!history [limit] [-p Product] [-u PlayerID]`', value: 'Full order history with filters', inline: false },
       { name: '`!verify @user`', value: 'Verify a user to use the bot (admin only)', inline: false },
       { name: '`!unverify @user`', value: 'Remove verification from a user (admin only)', inline: false },
       { name: '`!verified`', value: 'List all verified users', inline: false },
@@ -875,6 +919,15 @@ function slashToMessage(interaction) {
       args = [str('uid')];
       const r = str('region');
       if (r) args.push(r);
+      break;
+    }
+    case 'history': {
+      const lim = interaction.options.getInteger('limit');
+      const prod = str('product');
+      const pid = str('player_id');
+      if (lim) args.push(String(lim));
+      if (prod) args.push('-p', prod);
+      if (pid) args.push('-u', pid);
       break;
     }
     case 'verifytoggle': {
@@ -951,6 +1004,9 @@ async function routeCommand(message, command, args) {
       break;
     case 'player':
       await handlePlayer(message, args);
+      break;
+    case 'history':
+      await handleHistory(message, args);
       break;
     case 'verify':
       await handleVerify(message, args);

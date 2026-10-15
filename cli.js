@@ -25,6 +25,7 @@ Usage:
   node cli.js rates
   node cli.js verifytoggle [on|off]
   node cli.js player <UID> [region]
+  node cli.js history [limit] [-p Product] [-u PlayerID]
   node cli.js help
 Examples:
   node cli.js add 100DB 123456789 350 290
@@ -435,6 +436,37 @@ async function cmdPlayer(args) {
   }
 }
 
+async function cmdHistory(args) {
+  let limit = 20;
+  let product = null;
+  let player = null;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '-p' || args[i] === '--product') { product = args[i + 1]; i++; }
+    else if (args[i] === '-u' || args[i] === '--player') { player = args[i + 1]; i++; }
+    else if (!isNaN(Number(args[i]))) limit = Math.min(Math.max(Number(args[i]), 1), 50);
+    else {
+      console.error('Usage: node cli.js history [limit] [-p Product] [-u PlayerID]');
+      process.exitCode = 1;
+      return;
+    }
+  }
+  try {
+    let rows = await db.getAllOrders();
+    if (product) rows = rows.filter((r) => String(r.product).toUpperCase() === String(product).toUpperCase());
+    if (player) rows = rows.filter((r) => String(r.player_id) === String(player));
+    if (!rows.length) { console.log('No orders match the filters.'); return; }
+    const shown = rows.slice(0, limit);
+    console.log(`Order History (${shown.length}/${rows.length})`);
+    console.table(shown.map((o, i) => ({ '#': i + 1, ID: o.id, Product: o.product, Player: o.player_id, Price: Number(o.price), Rate: Number(o.rate), Profit: Number(o.price) - Number(o.rate), Date: new Date(o.created_at).toLocaleString() })));
+    const revenue = shown.reduce((s, o) => s + Number(o.price), 0);
+    const cost = shown.reduce((s, o) => s + Number(o.rate), 0);
+    console.log(`Revenue: ${formatLKR(revenue)} | Net Profit: ${formatLKR(revenue - cost)}`);
+  } catch (e) {
+    console.error('Database Error:', e.message);
+    process.exitCode = 1;
+  }
+}
+
 async function dispatch(command, args) {
   switch (command) {
     case 'add':
@@ -484,6 +516,9 @@ async function dispatch(command, args) {
       break;
     case 'player':
       await cmdPlayer(args);
+      break;
+    case 'history':
+      await cmdHistory(args);
       break;
     case 'help':
     default:

@@ -46,6 +46,10 @@ const commands = [
     .addStringOption((o) => o.setName('mode').setDescription('on or off')
       .addChoices({ name: 'on', value: 'on' }, { name: 'off', value: 'off' })),
   new SlashCommandBuilder().setName('help').setDescription('Show all commands'),
+  new SlashCommandBuilder().setName('history').setDescription('Full order history with filters')
+    .addIntegerOption((o) => o.setName('limit').setDescription('Max rows (1-50, default 20)').setMinValue(1).setMaxValue(50))
+    .addStringOption((o) => o.setName('product').setDescription('Filter by product'))
+    .addStringOption((o) => o.setName('player_id').setDescription('Filter by player UID')),
 ].map((c) => c.toJSON());
 
 async function main() {
