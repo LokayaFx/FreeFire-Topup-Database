@@ -43,7 +43,7 @@ def cmd_add(args):
             print(f'No saved rate for "{product}". Give rate manually.')
             return 1
         rate = float(saved[0]["rate"])
-    custom_date, custom_time = parse_flags(rest, 0)
+    custom_date, custom_time, _ = parse_flags(rest)
     try:
         created_at = build_datetime(custom_date, custom_time)
     except ValueError as e:
