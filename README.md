@@ -171,15 +171,6 @@ node cli.js export [filepath]
 - **@supabase/supabase-js v2**
 - **dotenv**
 
-## Python Version (`python/`)
-Same bot core ported to Python (discord.py + Supabase). Prefix `!` commands, same `.env`.
-```bash
-cd python
-pip install -r requirements.txt
-python bot.py          # Discord bot
-python cli.py profit   # CLI (add/sales/profit/search/player, no args = shell)
-```
-
 ## Security
 - Never commit `.env` file
 - Bot owner (`OWNER_ID`) has automatic admin access
